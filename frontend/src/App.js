@@ -17,6 +17,8 @@ import Team from "./pages/Team";
 import Analytics from "./pages/Analytics";
 import Settings from "./pages/Settings";
 import AcceptInvite from "./pages/AcceptInvite";
+import AuditLogs from "./pages/AuditLogs";
+import Campaigns from "./pages/Campaigns";
 
 function Shell({ children }) { return <AppShell>{children}</AppShell>; }
 
@@ -38,6 +40,8 @@ export default function App() {
           <Route path="/knowledge" element={<ProtectedRoute><Shell><KnowledgeBase /></Shell></ProtectedRoute>} />
           <Route path="/team" element={<ProtectedRoute><Shell><Team /></Shell></ProtectedRoute>} />
           <Route path="/analytics" element={<ProtectedRoute><Shell><Analytics /></Shell></ProtectedRoute>} />
+          <Route path="/audit" element={<ProtectedRoute><Shell><AuditLogs /></Shell></ProtectedRoute>} />
+          <Route path="/campaigns" element={<ProtectedRoute><Shell><Campaigns /></Shell></ProtectedRoute>} />
           <Route path="/settings" element={<ProtectedRoute><Shell><Settings /></Shell></ProtectedRoute>} />
           <Route path="/" element={<Navigate to="/dashboard" replace />} />
           <Route path="*" element={<Navigate to="/dashboard" replace />} />

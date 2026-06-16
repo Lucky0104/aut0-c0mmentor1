@@ -103,6 +103,12 @@ async def _process_change(source_id: str, field: str, value: dict):
             "score": cls.get("lead_score", 0), "category": cls.get("category"),
             "status": "new", "created_at": _now(),
         })
+        from core.events import notify
+        await notify(tenant_id, "new_lead", f"New lead from {doc['from_name']} (score {cls.get('lead_score', 0)})", {"comment_id": comment_id})
+
+    if doc.get("sentiment") == "negative":
+        from core.events import notify as _notify
+        await _notify(tenant_id, "negative_comment", f"Negative comment from {doc['from_name']}", {"comment_id": comment_id})
 
     try:
         reply_text = await generate_reply(message, cls, kb_ctx, brand)

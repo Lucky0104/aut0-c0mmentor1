@@ -10,6 +10,11 @@ export const api = axios.create({
 api.interceptors.request.use((config) => {
   const tid = localStorage.getItem("dashai_tid");
   if (tid) config.headers["X-Tenant-Id"] = tid;
+  // CSRF double-submit: read the non-httpOnly cookie and echo as header
+  const match = document.cookie.match(/(?:^|;\s*)dashai_csrf=([^;]+)/);
+  if (match && ["post", "put", "patch", "delete"].includes((config.method || "get").toLowerCase())) {
+    config.headers["X-CSRF-Token"] = decodeURIComponent(match[1]);
+  }
   return config;
 });
 

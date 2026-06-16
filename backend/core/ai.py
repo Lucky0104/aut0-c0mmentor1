@@ -119,3 +119,24 @@ async def generate_campaign_ideas(brand: dict, kb_summary: str, recent_themes: l
     )
     resp = await chat.send_message(UserMessage(text=prompt))
     return _extract_json(resp if isinstance(resp, str) else str(resp))
+
+
+
+
+async def generate_dm_opener(comment_text: str, from_name: str, brand: dict, kb_summary: str) -> str:
+    chat = LlmChat(
+        api_key=API_KEY,
+        session_id=f"dm-{uuid.uuid4()}",
+        system_message=(
+            "You write a short, personal DM opener to follow up with a high-intent prospect from a public comment. "
+            "Rules: max 45 words, warm but professional, no emojis, no salesy buzzwords, reference what they asked. "
+            f"Brand: {brand.get('name','')}. Tone: {brand.get('tone','friendly professional')}. "
+            "Return ONLY the message body."
+        ),
+    ).with_model("anthropic", "claude-sonnet-4-5-20250929")
+    prompt = (
+        f"Knowledge base context:\n{kb_summary or '(empty)'}\n\n"
+        f"Prospect name: {from_name}\nTheir public comment: \"{comment_text}\"\n\nWrite the DM opener."
+    )
+    resp = await chat.send_message(UserMessage(text=prompt))
+    return (resp if isinstance(resp, str) else str(resp)).strip().strip('"').strip()

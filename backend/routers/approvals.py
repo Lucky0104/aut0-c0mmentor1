@@ -58,4 +58,6 @@ async def act(comment_id: str, action: ApprovalAction, ctx=Depends(require_role(
     })
     await dbmod.approvals.update_one({"_id": appr["_id"]}, {"$set": {"status": "approved", "decided_by": ctx["user"]["id"], "decided_at": _now(), "final_reply": reply_text}})
     await dbmod.comments.update_one({"tenant_id": tid, "comment_id": comment_id}, {"$set": {"status": "replied"}})
+    from core.events import log_action
+    await log_action(tid, ctx["user"]["id"], f"approval.{action.action}", comment_id, {"text": reply_text[:200]})
     return {"ok": True}

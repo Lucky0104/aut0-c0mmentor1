@@ -9,7 +9,8 @@ ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
 
 from core import db as dbmod
-from routers import auth, tenant, pages, instagram, comments, approvals, leads, kb, team, analytics, webhooks
+from core.csrf import CSRFMiddleware
+from routers import auth, tenant, pages, instagram, comments, approvals, leads, kb, team, analytics, webhooks, audit, campaigns, notifications
 
 app = FastAPI(title="DashAI - Social Comment Manager")
 
@@ -37,6 +38,9 @@ api_router.include_router(kb.router)
 api_router.include_router(team.router)
 api_router.include_router(analytics.router)
 api_router.include_router(webhooks.router)
+api_router.include_router(audit.router)
+api_router.include_router(campaigns.router)
+api_router.include_router(notifications.router)
 
 app.include_router(api_router)
 
@@ -48,6 +52,7 @@ app.add_middleware(
     allow_headers=["*"],
     expose_headers=["set-cookie"],
 )
+app.add_middleware(CSRFMiddleware)
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)

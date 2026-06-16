@@ -62,6 +62,8 @@ async def connect_page(page_id: str, ctx=Depends(require_role("owner", "admin"))
         "active": True,
     }
     await dbmod.pages.update_one({"tenant_id": tid, "page_id": page_id}, {"$set": doc}, upsert=True)
+    from core.events import log_action
+    await log_action(tid, ctx["user"]["id"], "page.connected", page_id, {"name": target["name"]})
     # Try to subscribe webhook (best-effort)
     try:
         await meta.subscribe_page(page_id, page_token)

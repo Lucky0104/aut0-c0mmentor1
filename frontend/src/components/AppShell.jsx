@@ -1,10 +1,11 @@
 import { NavLink, useNavigate } from "react-router-dom";
 import { useAuth } from "../lib/auth";
+import { api } from "../lib/api";
 import {
   ChartBar, ChatCircleDots, CheckSquare, Users, BookOpen,
-  TrendUp, FacebookLogo, GearSix, SignOut, CaretDown
+  TrendUp, FacebookLogo, GearSix, SignOut, CaretDown, Megaphone, ShieldCheck, Bell
 } from "@phosphor-icons/react";
-import { useState } from "react";
+import { useState, useEffect, useCallback } from "react";
 
 const navItems = [
   { to: "/dashboard", label: "Dashboard", icon: ChartBar, tid: "nav-dashboard" },
@@ -12,16 +13,36 @@ const navItems = [
   { to: "/comments", label: "Comments", icon: ChatCircleDots, tid: "nav-comments" },
   { to: "/approvals", label: "Approvals", icon: CheckSquare, tid: "nav-approvals" },
   { to: "/leads", label: "Leads", icon: TrendUp, tid: "nav-leads" },
+  { to: "/campaigns", label: "Campaigns", icon: Megaphone, tid: "nav-campaigns" },
   { to: "/knowledge", label: "Knowledge Base", icon: BookOpen, tid: "nav-kb" },
   { to: "/team", label: "Team", icon: Users, tid: "nav-team" },
   { to: "/analytics", label: "Analytics", icon: ChartBar, tid: "nav-analytics" },
+  { to: "/audit", label: "Audit Logs", icon: ShieldCheck, tid: "nav-audit" },
   { to: "/settings", label: "Settings", icon: GearSix, tid: "nav-settings" },
 ];
 
 export default function AppShell({ children }) {
   const { me, activeTenant, switchTenant, logout } = useAuth();
   const [open, setOpen] = useState(false);
+  const [bell, setBell] = useState(false);
+  const [notifs, setNotifs] = useState({ items: [], unread: 0 });
   const navigate = useNavigate();
+
+  const loadNotifs = useCallback(async () => {
+    try { const { data } = await api.get("/notifications"); setNotifs(data); } catch (e) { /* ignore */ }
+  }, []);
+
+  useEffect(() => {
+    if (!activeTenant) return;
+    loadNotifs();
+    const t = setInterval(loadNotifs, 30000);
+    return () => clearInterval(t);
+  }, [activeTenant, loadNotifs]);
+
+  const markRead = async () => {
+    await api.post("/notifications/read-all");
+    setNotifs((n) => ({ ...n, unread: 0 }));
+  };
 
   return (
     <div className="min-h-screen flex bg-white text-foreground">
@@ -104,7 +125,36 @@ export default function AppShell({ children }) {
       </aside>
 
       {/* Main */}
-      <main className="flex-1 min-w-0 overflow-x-auto">{children}</main>
+      <main className="flex-1 min-w-0 overflow-x-auto relative">
+        <div className="absolute top-4 right-6 z-10">
+          <button
+            data-testid="notifications-bell"
+            onClick={() => { setBell((b) => !b); if (notifs.unread) markRead(); }}
+            className="relative border border-border bg-white p-2 hover:border-foreground transition"
+          >
+            <Bell size={16} />
+            {notifs.unread > 0 && (
+              <span data-testid="notifications-unread-count" className="absolute -top-1.5 -right-1.5 bg-destructive text-white text-[10px] mono px-1.5 py-0.5 leading-none">
+                {notifs.unread}
+              </span>
+            )}
+          </button>
+          {bell && (
+            <div data-testid="notifications-dropdown" className="absolute right-0 mt-2 w-80 bg-white border border-border shadow-xl max-h-96 overflow-y-auto">
+              <div className="px-4 py-2 border-b border-border overline text-muted-foreground">Notifications</div>
+              {notifs.items.length === 0 && <div className="p-6 text-center text-xs text-muted-foreground">All caught up.</div>}
+              {notifs.items.map((n, i) => (
+                <div key={`${n.at}-${i}`} className="px-4 py-3 border-b border-border last:border-0 text-sm">
+                  <div className="font-semibold">{n.kind}</div>
+                  <div className="text-muted-foreground text-xs mt-0.5">{n.message}</div>
+                  <div className="mono text-[10px] text-muted-foreground mt-1">{n.at?.slice(0, 19)}</div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+        {children}
+      </main>
     </div>
   );
 }

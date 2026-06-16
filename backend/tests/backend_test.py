@@ -83,6 +83,54 @@ def H(jwt, tid=None):
     return h
 
 
+# ====================================================================
+# CSRF double-submit cookie auto-injection (iteration 3)
+# ====================================================================
+@pytest.fixture(autouse=True, scope="session")
+def _csrf_autoinject():
+    """Fetch dashai_csrf cookie once, monkey-patch requests.{post,patch,delete}
+    to (a) include the cookie, (b) echo it as X-CSRF-Token header,
+    EXCEPT for /api/webhooks/meta which is CSRF-exempt."""
+    r0 = requests.get(f"{BASE_URL}/api/health", timeout=10)
+    csrf = r0.cookies.get("dashai_csrf")
+    if not csrf:
+        # cookie is set on the response of a request that lacked it; one more GET should expose it
+        r1 = requests.get(f"{BASE_URL}/api/health", timeout=10)
+        csrf = r1.cookies.get("dashai_csrf") or r0.cookies.get("dashai_csrf")
+    assert csrf, "Backend did not set dashai_csrf cookie on GET /api/health"
+
+    _orig = {"post": requests.post, "patch": requests.patch, "delete": requests.delete}
+
+    def _wrap(method_name):
+        orig = _orig[method_name]
+        def _fn(url, **kw):
+            if "/api/webhooks/meta" not in url:
+                headers = dict(kw.get("headers") or {})
+                headers.setdefault("X-CSRF-Token", csrf)
+                kw["headers"] = headers
+                cookies = kw.get("cookies")
+                if cookies is None:
+                    kw["cookies"] = {"dashai_csrf": csrf}
+                elif isinstance(cookies, dict):
+                    cookies.setdefault("dashai_csrf", csrf)
+                    kw["cookies"] = cookies
+            return orig(url, **kw)
+        return _fn
+
+    requests.post = _wrap("post")
+    requests.patch = _wrap("patch")
+    requests.delete = _wrap("delete")
+    yield csrf
+    requests.post = _orig["post"]
+    requests.patch = _orig["patch"]
+    requests.delete = _orig["delete"]
+
+
+@pytest.fixture(scope="session")
+def csrf_token(_csrf_autoinject):
+    return _csrf_autoinject
+
+
 # ---------- Public / health ----------
 def test_health():
     r = requests.get(f"{BASE_URL}/api/health", timeout=10)
@@ -407,3 +455,170 @@ def test_bearer_header_still_works(seeded_owner):
     r = requests.get(f"{BASE_URL}/api/auth/me", headers=H(seeded_owner["jwt"]), timeout=10)
     assert r.status_code == 200
     assert r.json()["user"]["id"] == seeded_owner["uid"]
+
+
+# ====================================================================
+# Iteration 3: CSRF, audit, notifications, campaigns, leads/generate-dm, oauth state
+# ====================================================================
+
+# ---------- CSRF rejection: state-mutating without header -> 403 ----------
+def test_csrf_missing_header_returns_403(seeded_owner):
+    """Direct requests.Session bypasses our monkey-patched module-level requests.*,
+    so we can hit the API without the X-CSRF-Token header even though the cookie is sent."""
+    s = requests.Session()
+    # seed the cookie first
+    s.get(f"{BASE_URL}/api/health", timeout=10)
+    # POST without X-CSRF-Token header — should be 403
+    r = s.post(
+        f"{BASE_URL}/api/kb",
+        headers=H(seeded_owner["jwt"], seeded_owner["tid"]),
+        json={"kind": "faq", "title": "TEST_csrf", "content": "x"},
+        timeout=10,
+    )
+    assert r.status_code == 403, f"expected 403, got {r.status_code}: {r.text}"
+    assert "csrf" in r.text.lower()
+
+
+def test_csrf_wrong_header_returns_403(seeded_owner, csrf_token):
+    s = requests.Session()
+    s.cookies.set("dashai_csrf", csrf_token)
+    r = s.post(
+        f"{BASE_URL}/api/kb",
+        headers={**H(seeded_owner["jwt"], seeded_owner["tid"]), "X-CSRF-Token": "wrong-value"},
+        json={"kind": "faq", "title": "TEST_csrf2", "content": "x"},
+        timeout=10,
+    )
+    assert r.status_code == 403
+
+
+def test_csrf_patch_delete_also_protected(seeded_owner):
+    s = requests.Session()
+    s.get(f"{BASE_URL}/api/health", timeout=10)
+    r = s.patch(
+        f"{BASE_URL}/api/tenant",
+        headers={**H(seeded_owner["jwt"], seeded_owner["tid"]), "Content-Type": "application/json"},
+        data=json.dumps({"business_name": "no_csrf"}),
+        timeout=10,
+    )
+    assert r.status_code == 403
+    r2 = s.delete(
+        f"{BASE_URL}/api/kb/some_id",
+        headers=H(seeded_owner["jwt"], seeded_owner["tid"]),
+        timeout=10,
+    )
+    assert r2.status_code == 403
+
+
+# ---------- CSRF exemption: webhook POST works WITHOUT X-CSRF-Token ----------
+def test_webhook_post_is_csrf_exempt():
+    body = json.dumps({"object": "page", "entry": []}).encode()
+    sig = "sha256=" + hmac.new(FB_APP_SECRET.encode(), body, hashlib.sha256).hexdigest()
+    # raw Session with no CSRF cookie/header at all
+    s = requests.Session()
+    r = s.post(
+        f"{BASE_URL}/api/webhooks/meta",
+        data=body,
+        headers={"Content-Type": "application/json", "x-hub-signature-256": sig},
+        timeout=10,
+    )
+    assert r.status_code == 200, f"webhook should be CSRF-exempt, got {r.status_code}: {r.text}"
+
+
+# ---------- GET /api/audit ----------
+def test_audit_endpoint_returns_array(seeded_owner):
+    r = requests.get(f"{BASE_URL}/api/audit",
+                     headers=H(seeded_owner["jwt"], seeded_owner["tid"]), timeout=10)
+    assert r.status_code == 200, r.text
+    j = r.json()
+    assert isinstance(j, list)
+    # schema check: if any entries exist they should have expected shape
+    for entry in j:
+        assert isinstance(entry, dict)
+
+
+def test_audit_requires_auth():
+    r = requests.get(f"{BASE_URL}/api/audit", timeout=10)
+    assert r.status_code == 401
+
+
+# ---------- GET /api/notifications & POST /read-all ----------
+def test_notifications_initial_shape(seeded_owner):
+    r = requests.get(f"{BASE_URL}/api/notifications",
+                     headers=H(seeded_owner["jwt"], seeded_owner["tid"]), timeout=10)
+    assert r.status_code == 200, r.text
+    j = r.json()
+    assert isinstance(j, dict)
+    assert "items" in j and "unread" in j
+    assert isinstance(j["items"], list)
+    assert isinstance(j["unread"], int)
+
+
+def test_notifications_read_all(seeded_owner):
+    r = requests.post(f"{BASE_URL}/api/notifications/read-all",
+                      headers=H(seeded_owner["jwt"], seeded_owner["tid"]), timeout=10)
+    assert r.status_code == 200, r.text
+    assert r.json() == {"ok": True}
+    # After read-all, unread should be 0
+    r2 = requests.get(f"{BASE_URL}/api/notifications",
+                      headers=H(seeded_owner["jwt"], seeded_owner["tid"]), timeout=10)
+    assert r2.status_code == 200
+    assert r2.json()["unread"] == 0
+
+
+# ---------- Campaigns ----------
+def test_campaigns_list_initially_empty(seeded_owner):
+    r = requests.get(f"{BASE_URL}/api/campaigns",
+                     headers=H(seeded_owner["jwt"], seeded_owner["tid"]), timeout=10)
+    assert r.status_code == 200, r.text
+    assert isinstance(r.json(), list)
+
+
+def test_campaigns_delete_nonexistent_404(seeded_owner):
+    r = requests.delete(f"{BASE_URL}/api/campaigns/nonexistent_camp_id",
+                        headers=H(seeded_owner["jwt"], seeded_owner["tid"]), timeout=10)
+    assert r.status_code == 404, f"got {r.status_code}: {r.text}"
+
+
+def test_campaigns_generate_viewer_forbidden(seeded_viewer):
+    r = requests.post(
+        f"{BASE_URL}/api/campaigns/generate",
+        headers=H(seeded_viewer["jwt"], seeded_viewer["tid"]),
+        json={"goal": "promote new product", "audience": "fans"},
+        timeout=30,
+    )
+    assert r.status_code == 403, f"viewer should be forbidden, got {r.status_code}: {r.text}"
+
+
+def test_campaigns_generate_owner_200_or_502(seeded_owner):
+    r = requests.post(
+        f"{BASE_URL}/api/campaigns/generate",
+        headers=H(seeded_owner["jwt"], seeded_owner["tid"]),
+        json={"goal": "promote a sale", "audience": "existing customers"},
+        timeout=60,
+    )
+    assert r.status_code in (200, 502), f"unexpected: {r.status_code}: {r.text}"
+
+
+# ---------- Leads generate-dm ----------
+def test_leads_generate_dm_nonexistent_404(seeded_owner):
+    r = requests.post(
+        f"{BASE_URL}/api/leads/nonexistent_lead_id/generate-dm",
+        headers=H(seeded_owner["jwt"], seeded_owner["tid"]),
+        timeout=15,
+    )
+    assert r.status_code == 404, f"got {r.status_code}: {r.text}"
+
+
+# ---------- OAuth state persisted in Mongo ----------
+def test_oauth_state_persisted_in_mongo():
+    r = requests.get(f"{BASE_URL}/api/auth/facebook/login", timeout=10)
+    assert r.status_code == 200
+    state = r.json()["state"]
+    assert state
+
+    async def _check():
+        doc = await dbmod.db.oauth_states.find_one({"state": state})
+        return doc
+
+    doc = asyncio.get_event_loop().run_until_complete(_check())
+    assert doc is not None, f"oauth state {state} not found in db.oauth_states"

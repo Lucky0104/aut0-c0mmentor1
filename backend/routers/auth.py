@@ -1,9 +1,9 @@
 import os
 import uuid
 import secrets
+from datetime import datetime, timezone, timedelta
 from fastapi import APIRouter, HTTPException, Query, Depends
 from fastapi.responses import RedirectResponse
-from datetime import datetime, timezone
 from core import db as dbmod
 from core import meta
 from core.security import create_jwt, encrypt_token
@@ -13,9 +13,6 @@ router = APIRouter(prefix="/auth", tags=["auth"])
 
 FRONTEND_URL = os.environ['FRONTEND_URL']
 
-# in-memory state store (short-lived); ok for MVP
-_state_cache: dict[str, dict] = {}
-
 
 def _now():
     return datetime.now(timezone.utc).isoformat()
@@ -24,12 +21,17 @@ def _now():
 @router.get("/facebook/login")
 async def fb_login():
     state = secrets.token_urlsafe(24)
-    _state_cache[state] = {"created": _now()}
+    expires = datetime.now(timezone.utc) + timedelta(minutes=10)
+    await dbmod.db.oauth_states.insert_one({"state": state, "created": _now(), "expires_at": expires})
     return {"url": meta.login_dialog_url(state), "state": state}
 
 
 @router.get("/facebook/callback")
 async def fb_callback(code: str = Query(...), state: str = Query("")):
+    # Validate state to prevent CSRF on OAuth
+    found = await dbmod.db.oauth_states.find_one_and_delete({"state": state}) if state else None
+    if state and not found:
+        return RedirectResponse(f"{FRONTEND_URL}/login?error=invalid_state")
     # Exchange code
     try:
         tok = await meta.exchange_code_for_token(code)

@@ -36,3 +36,8 @@ async def ensure_indexes():
     await approvals.create_index([("tenant_id", 1), ("status", 1)])
     await kb.create_index([("tenant_id", 1), ("kind", 1)])
     await invites.create_index("token", unique=True)
+    await audit_logs.create_index([("tenant_id", 1), ("at", -1)])
+    await notifications.create_index([("tenant_id", 1), ("user_id", 1), ("read", 1)])
+    await campaigns.create_index([("tenant_id", 1), ("created_at", -1)])
+    # OAuth state with 10-min TTL (Mongo TTL only triggers on Date BSON, so we store epoch seconds in expires_at)
+    await db.oauth_states.create_index("expires_at", expireAfterSeconds=0)
