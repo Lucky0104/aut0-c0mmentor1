@@ -1,56 +1,48 @@
-import { useEffect } from "react";
-import "@/App.css";
-import { BrowserRouter, Routes, Route } from "react-router-dom";
-import axios from "axios";
-import { HOME } from "@/constants/testIds";
+import "./App.css";
+import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
+import { Toaster } from "sonner";
+import { AuthProvider } from "./lib/auth";
+import ProtectedRoute from "./components/ProtectedRoute";
+import AppShell from "./components/AppShell";
+import Login from "./pages/Login";
+import OAuthSuccess from "./pages/OAuthSuccess";
+import Onboarding from "./pages/Onboarding";
+import Dashboard from "./pages/Dashboard";
+import PagesPage from "./pages/Pages";
+import Comments from "./pages/Comments";
+import Approvals from "./pages/Approvals";
+import Leads from "./pages/Leads";
+import KnowledgeBase from "./pages/KnowledgeBase";
+import Team from "./pages/Team";
+import Analytics from "./pages/Analytics";
+import Settings from "./pages/Settings";
+import AcceptInvite from "./pages/AcceptInvite";
 
-const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
-const API = `${BACKEND_URL}/api`;
+function Shell({ children }) { return <AppShell>{children}</AppShell>; }
 
-const Home = () => {
-  const helloWorldApi = async () => {
-    try {
-      const response = await axios.get(`${API}/`);
-      console.log(response.data.message);
-    } catch (e) {
-      console.error(e, `errored out requesting / api`);
-    }
-  };
-
-  useEffect(() => {
-    helloWorldApi();
-  }, []);
-
+export default function App() {
   return (
-    <div>
-      <header className="App-header">
-        <a
-          data-testid={HOME.emergentLink}
-          className="App-link"
-          href="https://emergent.sh"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <img src="https://avatars.githubusercontent.com/in/1201222?s=120&u=2686cf91179bbafbc7a71bfbc43004cf9ae1acea&v=4" />
-        </a>
-        <p className="mt-5">Building something incredible ~!</p>
-      </header>
-    </div>
-  );
-};
-
-function App() {
-  return (
-    <div className="App">
-      <BrowserRouter>
+    <BrowserRouter>
+      <AuthProvider>
+        <Toaster position="top-right" richColors />
         <Routes>
-          <Route path="/" element={<Home />}>
-            <Route index element={<Home />} />
-          </Route>
+          <Route path="/login" element={<Login />} />
+          <Route path="/oauth/success" element={<OAuthSuccess />} />
+          <Route path="/accept-invite/:token" element={<AcceptInvite />} />
+          <Route path="/onboarding" element={<ProtectedRoute requireOnboarded={false}><Onboarding /></ProtectedRoute>} />
+          <Route path="/dashboard" element={<ProtectedRoute><Shell><Dashboard /></Shell></ProtectedRoute>} />
+          <Route path="/pages" element={<ProtectedRoute><Shell><PagesPage /></Shell></ProtectedRoute>} />
+          <Route path="/comments" element={<ProtectedRoute><Shell><Comments /></Shell></ProtectedRoute>} />
+          <Route path="/approvals" element={<ProtectedRoute><Shell><Approvals /></Shell></ProtectedRoute>} />
+          <Route path="/leads" element={<ProtectedRoute><Shell><Leads /></Shell></ProtectedRoute>} />
+          <Route path="/knowledge" element={<ProtectedRoute><Shell><KnowledgeBase /></Shell></ProtectedRoute>} />
+          <Route path="/team" element={<ProtectedRoute><Shell><Team /></Shell></ProtectedRoute>} />
+          <Route path="/analytics" element={<ProtectedRoute><Shell><Analytics /></Shell></ProtectedRoute>} />
+          <Route path="/settings" element={<ProtectedRoute><Shell><Settings /></Shell></ProtectedRoute>} />
+          <Route path="/" element={<Navigate to="/dashboard" replace />} />
+          <Route path="*" element={<Navigate to="/dashboard" replace />} />
         </Routes>
-      </BrowserRouter>
-    </div>
+      </AuthProvider>
+    </BrowserRouter>
   );
 }
-
-export default App;
