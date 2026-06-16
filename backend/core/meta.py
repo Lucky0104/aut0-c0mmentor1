@@ -17,7 +17,6 @@ DEFAULT_SCOPES = [
     "pages_manage_metadata",
     "pages_manage_engagement",
     "instagram_basic",
-    "instagram_manage_comments",
     "business_management",
 ]
 
