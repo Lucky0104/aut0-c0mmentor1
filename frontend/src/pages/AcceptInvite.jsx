@@ -1,26 +1,40 @@
-import { useEffect, useState } from "react";
-import { useParams, useNavigate } from "react-router-dom";
+import { useEffect, useRef, useState } from "react";
+import { useParams } from "react-router-dom";
 import { api } from "../lib/api";
+import { useAuth } from "../lib/auth";
 
 export default function AcceptInvite() {
   const { token } = useParams();
-  const nav = useNavigate();
+  const { me, loading } = useAuth();
   const [status, setStatus] = useState("Joining…");
+  const ran = useRef(false);
 
   useEffect(() => {
-    if (!localStorage.getItem("dashai_token")) {
-      localStorage.setItem("dashai_invite_pending", token);
-      nav("/login");
+    if (loading || ran.current) return;
+    ran.current = true;
+    if (!me) {
+      sessionStorage.setItem("dashai_invite_pending", token);
+      window.location.href = "/login";
       return;
     }
-    api.post(`/team/accept/${token}`)
+    api
+      .post(`/team/accept/${token}`)
       .then(({ data }) => {
         localStorage.setItem("dashai_tid", data.tenant_id);
         setStatus("Joined! Redirecting…");
-        setTimeout(() => { window.location.href = "/dashboard"; }, 600);
+        setTimeout(() => {
+          window.location.href = "/dashboard";
+        }, 600);
       })
-      .catch((e) => setStatus(e.response?.data?.detail || "Invite invalid"));
-  }, [token, nav]);
+      .catch((e) => {
+        const detail = e?.response?.data?.detail || "Invite invalid";
+        setStatus(detail);
+      });
+  }, [token, me, loading]);
 
-  return <div className="min-h-screen flex items-center justify-center"><span className="overline">{status}</span></div>;
+  return (
+    <div className="min-h-screen flex items-center justify-center">
+      <span className="overline">{status}</span>
+    </div>
+  );
 }

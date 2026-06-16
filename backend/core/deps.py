@@ -1,13 +1,20 @@
-from fastapi import Depends, HTTPException, Header, status
+from fastapi import Depends, HTTPException, Header, Cookie, status
 from typing import Optional
 from core.security import decode_jwt
 from core import db as dbmod
 
 
-async def get_current_user(authorization: Optional[str] = Header(None)):
-    if not authorization or not authorization.startswith("Bearer "):
+async def get_current_user(
+    authorization: Optional[str] = Header(None),
+    dashai_token: Optional[str] = Cookie(None),
+):
+    token = None
+    if dashai_token:
+        token = dashai_token
+    elif authorization and authorization.startswith("Bearer "):
+        token = authorization.split(" ", 1)[1]
+    if not token:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Missing token")
-    token = authorization.split(" ", 1)[1]
     try:
         payload = decode_jwt(token)
     except Exception:

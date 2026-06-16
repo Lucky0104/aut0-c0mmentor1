@@ -110,6 +110,7 @@ async def sync_page(page_id: str, ctx=Depends(require_role("owner", "admin"))):
     if not page:
         raise HTTPException(404, "Page not connected")
     tok = decrypt_token(page["access_token_enc"])
+    posts: list[dict] = []
     try:
         posts = await meta.get_page_posts(page_id, tok, limit=10)
     except Exception as e:

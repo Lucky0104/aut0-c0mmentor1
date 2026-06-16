@@ -21,9 +21,18 @@ export default function Dashboard() {
   const [cats, setCats] = useState([]);
 
   useEffect(() => {
-    api.get("/analytics/overview").then((r) => setStats(r.data));
-    api.get("/analytics/sentiment-trend?days=7").then((r) => setTrend(r.data));
-    api.get("/analytics/categories").then((r) => setCats(r.data));
+    let cancel = false;
+    Promise.all([
+      api.get("/analytics/overview"),
+      api.get("/analytics/sentiment-trend?days=7"),
+      api.get("/analytics/categories"),
+    ]).then(([o, t, c]) => {
+      if (cancel) return;
+      setStats(o.data);
+      setTrend(t.data);
+      setCats(c.data);
+    });
+    return () => { cancel = true; };
   }, []);
 
   return (

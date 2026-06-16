@@ -1,0 +1,31 @@
+{
+  "summary": "Iteration 2 backend-only re-test after httpOnly cookie auth refactor. All 35 pytest tests passed (100%): 27 prior tests (regression) + 8 new tests covering /api/auth/logout, /api/auth/switch/{tid} new {ok,tenant_id} shape, cookie-based auth on /auth/me and /tenant, invalid/expired cookie -> 401 'Invalid token', and explicit Bearer-header backwards-compat guard.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "/api/auth/logout", "issue": "Endpoint is unauthenticated — anyone can hit it; harmless since it just clears a cookie, but consider gating to authenticated users for symmetry."},
+      {"endpoint": "/api/auth/switch/{tid}", "issue": "Cookie response uses secure=True + samesite=lax. Works for cross-site testing because clients send the cookie they receive, but in browsers a same-site frontend on a different sub-path may need samesite=none for strict cross-origin POSTs from third-party widgets. Current preview origin works."},
+      {"endpoint": "core/deps.py", "issue": "If both cookie and Authorization header are present, cookie wins. Document this precedence to avoid confusion when a stale cookie shadows a fresh Bearer."}
+    ]
+  },
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/backend_test.py",
+    "/app/test_reports/pytest/pytest_results.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "deps.py precedence (cookie over Bearer) is fine but should be documented; stale browser cookies could mask Bearer-based debugging.",
+    "auth.py /logout is unauthenticated — acceptable but consider returning the same JSONResponse via the same RedirectResponse-style helper for consistency.",
+    "auth.py cookies are set with secure=True + samesite=lax — correct for the HTTPS preview URL; if you ever serve over http locally these won't be stored by the browser. Flag for local dev parity.",
+    "switch_tenant: import of JSONResponse is local — fine, but move to module-level imports for consistency."
+  ],
+  "updated_files": ["/app/backend/tests/backend_test.py"],
+  "success_rate": {"backend": "100% (35/35)", "frontend": "n/a (skipped per request)"},
+  "test_credentials": "Seeded TEST_ users/tenants dynamically via core.security.create_jwt + dbmod inserts (TEST_ prefixed). No cleanup performed by design.",
+  "seed_data_creation": "Same as iteration 1: 3 session-scoped seeded user+tenant+member combos via motor; expired-JWT test uses pyjwt directly with JWT_SECRET from env.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "All 35 backend tests pass: cd /app/backend && python -m pytest tests/backend_test.py -v. New cookie-auth tests live at the bottom of the file (test_logout_returns_ok_and_clears_cookie, test_switch_tenant_sets_cookie_and_returns_ok, test_switch_tenant_forbidden_for_non_member, test_me_via_cookie_only, test_tenant_endpoint_via_cookie, test_invalid_cookie_returns_401, test_expired_cookie_returns_401, test_bearer_header_still_works). Bearer header is still fully supported as fallback. /switch now returns {ok, tenant_id} with Set-Cookie (httponly) instead of {token}.",
+  "rca of the issue": "No defects found. All review-request acceptance criteria met."
+}

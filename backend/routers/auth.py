@@ -89,7 +89,20 @@ async def fb_callback(code: str = Query(...), state: str = Query("")):
         active_tid = m["tenant_id"] if m else None
 
     jwt_token = create_jwt(user["id"], active_tid)
-    return RedirectResponse(f"{FRONTEND_URL}/oauth/success?token={jwt_token}")
+    resp = RedirectResponse(f"{FRONTEND_URL}/oauth/success")
+    resp.set_cookie(
+        key="dashai_token", value=jwt_token, max_age=7 * 24 * 3600,
+        httponly=True, secure=True, samesite="lax", path="/",
+    )
+    return resp
+
+
+@router.post("/logout")
+async def logout():
+    from fastapi.responses import JSONResponse
+    resp = JSONResponse({"ok": True})
+    resp.delete_cookie("dashai_token", path="/")
+    return resp
 
 
 @router.get("/me")
@@ -109,7 +122,14 @@ async def me(user=Depends(get_current_user)):
 
 @router.post("/switch/{tenant_id}")
 async def switch_tenant(tenant_id: str, user=Depends(get_current_user)):
+    from fastapi.responses import JSONResponse
     m = await dbmod.members.find_one({"user_id": user["id"], "tenant_id": tenant_id})
     if not m:
         raise HTTPException(403, "Not a member")
-    return {"token": create_jwt(user["id"], tenant_id)}
+    new_token = create_jwt(user["id"], tenant_id)
+    resp = JSONResponse({"ok": True, "tenant_id": tenant_id})
+    resp.set_cookie(
+        key="dashai_token", value=new_token, max_age=7 * 24 * 3600,
+        httponly=True, secure=True, samesite="lax", path="/",
+    )
+    return resp

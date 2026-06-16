@@ -7,9 +7,16 @@ export default function Analytics() {
   const [tops, setTops] = useState([]);
 
   useEffect(() => {
-    api.get("/analytics/sentiment-trend?days=14").then((r) => setTrend(r.data));
-    api.get("/analytics/categories").then((r) => setCats(r.data));
-    api.get("/analytics/top-pages").then((r) => setTops(r.data));
+    let cancel = false;
+    Promise.all([
+      api.get("/analytics/sentiment-trend?days=14"),
+      api.get("/analytics/categories"),
+      api.get("/analytics/top-pages"),
+    ]).then(([t, c, p]) => {
+      if (cancel) return;
+      setTrend(t.data); setCats(c.data); setTops(p.data);
+    });
+    return () => { cancel = true; };
   }, []);
 
   const max = Math.max(1, ...cats.map((c) => c.count));
@@ -58,7 +65,7 @@ export default function Analytics() {
           <div className="overline text-muted-foreground">Top performing pages</div>
           <div className="mt-5 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
             {tops.map((t, idx) => (
-              <div key={idx} data-testid={`top-page-${idx}`} className="border border-border p-4">
+              <div key={t.page?.page_id || `top-${idx}`} data-testid={`top-page-${idx}`} className="border border-border p-4">
                 <div className="font-bold">{t.page?.name || "—"}</div>
                 <div className="overline text-muted-foreground mt-1">{t.page?.category || ""}</div>
                 <div className="mt-3 text-3xl font-black" style={{ fontFamily: "Chivo, sans-serif" }}>{t.comments}</div>

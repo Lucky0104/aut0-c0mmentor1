@@ -297,3 +297,113 @@ def test_pages_discover_meta_error_502(seeded_owner):
                      headers=H(seeded_owner["jwt"], seeded_owner["tid"]), timeout=30)
     # Expected: 502 because the fake FB token will fail at Meta. Should not be 500.
     assert r.status_code == 502, f"got {r.status_code}: {r.text}"
+
+
+
+# ====================================================================
+# NEW (iteration 2): httpOnly cookie auth + /logout + /switch shape
+# ====================================================================
+
+# ---------- POST /api/auth/logout clears cookie ----------
+def test_logout_returns_ok_and_clears_cookie():
+    r = requests.post(f"{BASE_URL}/api/auth/logout", timeout=10)
+    assert r.status_code == 200
+    assert r.json() == {"ok": True}
+    # Set-Cookie header should clear dashai_token (Max-Age=0 / expires past / empty value)
+    sc = r.headers.get("set-cookie", "") or r.headers.get("Set-Cookie", "")
+    assert "dashai_token" in sc.lower(), f"expected dashai_token in Set-Cookie, got: {sc!r}"
+    low = sc.lower()
+    assert ("max-age=0" in low) or ("expires=" in low and "1970" in low) or ('dashai_token=""' in low) or ("dashai_token=;" in low), \
+        f"cookie not cleared: {sc!r}"
+
+
+# ---------- POST /api/auth/switch/{tid} returns {ok, tenant_id} + sets cookie ----------
+def test_switch_tenant_sets_cookie_and_returns_ok(seeded_owner):
+    r = requests.post(
+        f"{BASE_URL}/api/auth/switch/{seeded_owner['tid']}",
+        headers=H(seeded_owner["jwt"]), timeout=10,
+    )
+    assert r.status_code == 200, r.text
+    j = r.json()
+    # New shape: {ok, tenant_id} — NOT {token}
+    assert j.get("ok") is True
+    assert j.get("tenant_id") == seeded_owner["tid"]
+    assert "token" not in j, "switch response must no longer contain 'token' (cookie-based now)"
+    # Set-Cookie should contain a fresh JWT and be httponly
+    sc = r.headers.get("set-cookie", "") or r.headers.get("Set-Cookie", "")
+    assert "dashai_token=" in sc, f"missing dashai_token cookie: {sc!r}"
+    assert "httponly" in sc.lower(), f"cookie must be HttpOnly: {sc!r}"
+    # Cookie value should be a JWT (3 dot-separated segments)
+    token_val = None
+    for part in sc.split(";"):
+        part = part.strip()
+        if part.lower().startswith("dashai_token="):
+            token_val = part.split("=", 1)[1]
+            break
+    assert token_val and token_val.count(".") == 2, f"cookie value not a JWT: {token_val!r}"
+
+
+def test_switch_tenant_forbidden_for_non_member(seeded_owner, seeded_second_user):
+    r = requests.post(
+        f"{BASE_URL}/api/auth/switch/{seeded_second_user['tid']}",
+        headers=H(seeded_owner["jwt"]), timeout=10,
+    )
+    assert r.status_code == 403
+
+
+# ---------- Cookie-based auth on /api/auth/me ----------
+def test_me_via_cookie_only(seeded_owner):
+    s = requests.Session()
+    s.cookies.set("dashai_token", seeded_owner["jwt"])
+    # No Authorization header — cookie only
+    r = s.get(f"{BASE_URL}/api/auth/me", timeout=10)
+    assert r.status_code == 200, r.text
+    j = r.json()
+    assert j["user"]["id"] == seeded_owner["uid"]
+    assert any(t["id"] == seeded_owner["tid"] for t in j["tenants"])
+
+
+# ---------- Cookie auth works for tenant-scoped endpoint ----------
+def test_tenant_endpoint_via_cookie(seeded_owner):
+    s = requests.Session()
+    s.cookies.set("dashai_token", seeded_owner["jwt"])
+    r = s.get(f"{BASE_URL}/api/tenant",
+              headers={"X-Tenant-Id": seeded_owner["tid"]}, timeout=10)
+    assert r.status_code == 200, r.text
+    assert r.json()["id"] == seeded_owner["tid"]
+
+
+# ---------- Invalid cookie -> 401 Invalid token ----------
+def test_invalid_cookie_returns_401():
+    s = requests.Session()
+    s.cookies.set("dashai_token", "this.is.not-a-valid-jwt")
+    r = s.get(f"{BASE_URL}/api/auth/me", timeout=10)
+    assert r.status_code == 401
+    body = r.text.lower()
+    assert "invalid token" in body, f"expected 'Invalid token', got: {r.text!r}"
+
+
+# ---------- Expired cookie -> 401 ----------
+def test_expired_cookie_returns_401(seeded_owner):
+    # Build an expired JWT manually using same secret + algo
+    import jwt as _jwt
+    from datetime import datetime, timezone, timedelta
+    secret = os.environ["JWT_SECRET"]
+    past = datetime.now(timezone.utc) - timedelta(hours=1)
+    expired = _jwt.encode(
+        {"sub": seeded_owner["uid"], "tid": seeded_owner["tid"], "exp": past},
+        secret, algorithm="HS256",
+    )
+    s = requests.Session()
+    s.cookies.set("dashai_token", expired)
+    r = s.get(f"{BASE_URL}/api/auth/me", timeout=10)
+    assert r.status_code == 401
+    assert "invalid token" in r.text.lower()
+
+
+# ---------- Regression: Bearer header still accepted ----------
+def test_bearer_header_still_works(seeded_owner):
+    """Backwards compatibility — prior 27 tests rely on this; explicit guard."""
+    r = requests.get(f"{BASE_URL}/api/auth/me", headers=H(seeded_owner["jwt"]), timeout=10)
+    assert r.status_code == 200
+    assert r.json()["user"]["id"] == seeded_owner["uid"]

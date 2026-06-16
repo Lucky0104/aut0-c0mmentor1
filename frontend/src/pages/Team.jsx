@@ -12,7 +12,7 @@ export default function Team() {
 
   const load = async () => {
     const m = await api.get("/team/members"); setMembers(m.data);
-    try { const i = await api.get("/team/invites"); setInvites(i.data); } catch (e) {}
+    try { const i = await api.get("/team/invites"); setInvites(i.data); } catch (err) { console.warn("invites unavailable", err); }
   };
   useEffect(() => { load(); }, []);
 
