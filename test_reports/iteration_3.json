@@ -1,0 +1,32 @@
+{
+  "summary": "Iteration 3 backend-only testing. All 49/49 pytest tests pass (100%). Adds 14 new tests on top of the prior 35: CSRF double-submit cookie enforcement (missing header, wrong header, PATCH/DELETE), webhook CSRF exemption, GET /api/audit (+auth gate), GET/POST /api/notifications, /api/campaigns list/delete/generate (viewer 403, owner accepts 200 or 502 from Claude), POST /api/leads/{id}/generate-dm 404 path, and Mongo-persisted OAuth state verification. Prior 35 tests preserved via an autouse session-scoped CSRF fixture that monkey-patches requests.{post,patch,delete} to inject the dashai_csrf cookie + X-CSRF-Token header (webhook path remains exempt).",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "core/csrf.py", "issue": "CSRFMiddleware sets the cookie on the response only when it was missing on the request. First-ever client must therefore make a GET first before any state-mutating call. This is correct double-submit behavior, but means cold-start POSTs from new clients without a prior GET will always 403 with no hint. Consider returning 'CSRF token missing or invalid; perform a GET to /api/health first' as the detail message, or auto-set cookie + 403 with a Retry hint, so first-time consumers can self-diagnose."},
+      {"endpoint": "core/csrf.py", "issue": "samesite='lax' + secure=True is correct for the preview HTTPS origin. If frontend and backend ever land on different sites (true cross-site POST from an embedded widget), 'lax' will drop the cookie on POST. Document this constraint."},
+      {"endpoint": "/api/campaigns/generate", "issue": "Endpoint depends on external Claude call and may surface a 502 in test/CI environments. Acceptable per review-request spec; document as flaky-by-design."}
+    ]
+  },
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/backend_test.py",
+    "/app/test_reports/pytest/pytest_results.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "csrf.py uses secrets.compare_digest — good (timing-safe).",
+    "csrf.py exempts only the exact path /api/webhooks/meta — correct narrow scope. Verify Meta path never changes; if a versioned variant like /api/webhooks/meta/v2 is added it would need to be added to EXEMPT_PATHS.",
+    "Cookie is set with httponly=False so frontend JS can read it — required by the double-submit pattern; ensure no sensitive value is ever stored there (currently a random 24-byte token — fine).",
+    "oauth_states collection has a TTL index on expires_at — verified via /app/backend/core/db.py:43. Stale states will auto-evict.",
+    "Tests rely on monkey-patching the requests module at session scope; if any test creates a raw requests.Session() and POSTs without manually setting CSRF, it will (correctly) 403. The new csrf negative-path tests deliberately use Session() to bypass the patch — correct design."
+  ],
+  "updated_files": ["/app/backend/tests/backend_test.py"],
+  "success_rate": {"backend": "100% (49/49)", "frontend": "n/a (skipped per request)"},
+  "test_credentials": "Same as prior iterations: seeded TEST_ users/tenants dynamically via core.security.create_jwt + dbmod inserts.",
+  "seed_data_creation": "3 session-scoped seeded user+tenant+member combos (TEST_ prefix). OAuth-state test inspects db.oauth_states directly via motor.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Run: cd /app/backend && python -m pytest tests/backend_test.py -v. Key infra: autouse session fixture _csrf_autoinject monkey-patches requests.post/patch/delete to attach dashai_csrf cookie + X-CSRF-Token header to every state-mutating call EXCEPT /api/webhooks/meta. Negative CSRF tests use a fresh requests.Session() to bypass the patch. New endpoints covered: /api/audit, /api/notifications (GET + /read-all), /api/campaigns (GET/POST generate/DELETE), /api/leads/{id}/generate-dm, plus oauth state persisted in db.oauth_states.",
+  "rca of the issue": "No defects found. All CSRF behaviors (enforcement on POST/PATCH/DELETE, webhook exemption, cookie issuance) and all new endpoints behave per spec. Claude-backed campaigns/generate correctly returns 200 in this test run."
+}
