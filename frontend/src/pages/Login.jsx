@@ -10,7 +10,12 @@ export default function Login() {
     setLoading(true); setErr(null);
     try {
       const { data } = await api.get("/auth/facebook/login");
-      window.location.href = data.url;
+      // Break out of any iframe (Emergent preview, embed, etc.) — Facebook refuses to be iframed.
+      if (window.top && window.top !== window.self) {
+        window.top.location.href = data.url;
+      } else {
+        window.location.href = data.url;
+      }
     } catch (e) {
       setErr("Failed to start Facebook login");
       setLoading(false);
