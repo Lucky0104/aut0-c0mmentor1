@@ -22,6 +22,9 @@ audit_logs = db.audit_logs
 webhook_events = db.webhook_events
 invites = db.team_invites
 settings_col = db.tenant_settings
+# New collections for Crysta IVF auto-comment bot
+comment_logs = db.comment_logs
+monitored_posts = db.monitored_posts
 
 
 async def ensure_indexes():
@@ -41,3 +44,10 @@ async def ensure_indexes():
     await campaigns.create_index([("tenant_id", 1), ("created_at", -1)])
     # OAuth state with 10-min TTL (Mongo TTL only triggers on Date BSON, so we store epoch seconds in expires_at)
     await db.oauth_states.create_index("expires_at", expireAfterSeconds=0)
+
+    # --- Crysta IVF auto-comment bot indexes ---
+    await comment_logs.create_index("comment_id", unique=True)
+    await monitored_posts.create_index(
+        [("instagram_post_id", 1), ("tenant_id", 1)], unique=True
+    )
+    await campaigns.create_index([("tenant_id", 1), ("meta_synced_at", -1)])
