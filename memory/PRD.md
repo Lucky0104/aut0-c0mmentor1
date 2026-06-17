@@ -1,53 +1,104 @@
-# DashAI — Multi-Tenant FB/IG AI Comment Manager
+# DashAI / Crysta IVF Auto-Comment Bot — PRD
 
-## Original Problem Statement (verbatim summary)
-Build a production-ready multi-tenant SaaS that lets businesses connect Facebook Pages + Instagram Business Accounts, monitor comments in real time, classify intent + sentiment using Claude, auto-reply when safe, route negative/low-confidence to a human approval queue, detect leads, manage RBAC teams, view analytics, and maintain a knowledge base for grounded replies.
+## Original Problem Statement
+Crysta IVF runs a Facebook Ad campaign per city centre. Each campaign maps
+to one doctor + one clinic. When a user comments on the Instagram post
+boosted by that campaign, the bot must post a PUBLIC reply containing the
+centre's doctor name, address, phone.
 
-## User Choices
-- Tech stack: React + FastAPI + MongoDB (adapted from Next.js/Postgres spec)
-- Auth: Real Facebook OAuth only — no demo/mock
-- AI: Claude Sonnet 4.5 via Emergent Universal LLM Key
-- Scope: MVP excludes subscriptions / Stripe billing / Sentry / Docker / CI
+All data is real: real Facebook OAuth, real Meta Graph API, real ad
+account, real boosted posts. No mocks, no seed data, no hardcoded IDs.
 
-## Architecture
-- Backend FastAPI (`/api` prefix), motor MongoDB, JWT auth, Fernet-encrypted FB tokens
-- Frontend React + Tailwind + Shadcn UI, Swiss/High-Contrast design (Klein Blue #002FA7, Chivo / IBM Plex)
-- Claude pipeline: classify (14 categories + sentiment + lead_score + confidence) → conditional reply → auto-post to Meta or queue for approval
-- Multi-tenant: every collection keyed by `tenant_id`; `X-Tenant-Id` header + JWT enforce isolation; RBAC roles owner / admin / moderator / viewer
+## Architecture (current)
+- Backend: FastAPI + Motor (MongoDB) + httpx, Fernet-encrypted tokens, JWT
+  + cookie auth, CSRF double-submit, X-Hub-Signature-256 verified webhooks.
+- Frontend: React 19 + TanStack Query + Axios + shadcn/ui.
+- Multi-tenant — every collection keyed by `tenant_id`.
 
-## Implemented (Feb 2026)
-- Facebook OAuth (login URL with MongoDB-TTL state, callback exchange, long-lived token, /me discovery, httpOnly cookie issuance)
-- Page + IG Business Account discovery + connect (real Meta Graph v22.0)
-- Meta Webhook GET verify + POST signature verification (HMAC-SHA256) + async comment ingestion
-- Comment classification (14 categories), sentiment, lead score via Claude Sonnet 4.5
-- Auto-reply gate: only positive/neutral + confidence > 90% + safe categories
-- Approval Queue with approve / edit / reject → posts back to Meta
-- Lead Detection (score ≥ 60 or category=lead_intent) with status pipeline
-- **Auto-DM generator (NEW)** — per-lead button calls Claude for a personalized opener; copy to clipboard
-- Knowledge Base CRUD (products / services / FAQs / policies) used as RAG context
-- Team Management: invite link, accept, RBAC enforcement
-- Workspace switcher + multi-tenant membership
-- Analytics: KPI overview, sentiment trend (7/14d), category distribution, top pages
-- Settings: brand tone, reply style, auto-reply toggle
-- **Audit Logs (NEW)** — page connect, approval action events logged; UI page
-- **Campaigns (NEW)** — Claude-generated campaign ideas with audience/budget/copy/hashtags
-- **Notifications (NEW)** — in-app bell with unread badge; auto-created on new lead + negative comment
-- **Security: httpOnly cookie auth, CSRF double-submit middleware, MongoDB-TTL OAuth state, CORS-pinned origin**
-- 49/49 backend tests passing (100%)
+## Crysta IVF feature (Feb 2026)
+**Touches 7 files** (the 5 spec deliverables + auth.py + meta.py for OAuth scopes + ad_account_id).
 
-## Deferred — P1 / P2 Backlog
-- P1: Subscription plans + Stripe billing + plan-limit enforcement
-- P1: Audit logs page (collection already exists, no UI)
-- P1: Campaign Suggestions UI (backend helper in `core/ai.py:generate_campaign_ideas` exists, no route/page yet)
-- P1: Notifications (in-app + email)
-- P2: WebSocket real-time updates
-- P2: Move OAuth state cache from in-memory to Redis/Mongo TTL
-- P2: Move webhook processing to BullMQ-style queue (Celery + Redis)
-- P2: Sentry monitoring, Docker, CI/CD, load tests
-- P2: Invite expiry; full Audit Log UI; advanced lead scoring with ML
+### Implemented
+1. **OAuth callback** (`backend/routers/auth.py`)
+   - Scope expanded to include `ads_read`, `pages_read_engagement`,
+     `pages_manage_engagement`, `instagram_manage_comments`.
+   - After login, calls `/me/adaccounts`, picks the first
+     `account_status == 1` (ACTIVE) account, stores its bare numeric id
+     (no `act_` prefix) on `tenants.ad_account_id`.
+   - Both new-tenant and returning-tenant paths refresh `ad_account_id`.
 
-## Files
-- Backend: `/app/backend/server.py` + `/app/backend/core/*` + `/app/backend/routers/*`
-- Frontend: `/app/frontend/src/App.js` + `/app/frontend/src/pages/*` + `/app/frontend/src/components/*` + `/app/frontend/src/lib/*`
-- Design: `/app/design_guidelines.json`
-- Tests: `/app/backend/tests/backend_test.py` (created by testing agent)
+2. **Meta helper** (`backend/core/meta.py`)
+   - `DEFAULT_SCOPES` updated.
+   - New `get_user_adaccounts(token)` helper.
+
+3. **Campaigns router** (`backend/routers/campaigns.py`)
+   - `GET /api/campaigns/sync` — uses tenant's `ad_account_id`, calls
+     `/act_{id}/campaigns?filtering=[…effective_status IN ACTIVE,PAUSED]`,
+     upserts into `campaigns` collection with default centre-config
+     fields `null` and `is_configured: false`. 429 → 503, other errors
+     → 502 with Meta message.
+   - `GET /api/campaigns` — list, includes `monitored_posts_count`.
+   - `GET /api/campaigns/{id}` — single doc.
+   - `PATCH /api/campaigns/{id}/center-config` — saves doctor/address/
+     phone/whatsapp/template, sets `is_configured: true`.
+   - `GET /api/campaigns/{id}/posts` — fetches ads + Instagram permalinks,
+     joins with `monitored_posts` and `comment_logs` for counts.
+   - `POST/DELETE /api/campaigns/{id}/posts/{post_id}/monitor` — toggle;
+     blocks POST with 400 if `is_configured` is false.
+   - `GET /api/campaigns/comment-logs` — feed with filters
+     (`campaign_id`, `center_name`, `status`, `date_from`, `date_to`,
+     `q`). Joins campaign name + centre name for display.
+
+4. **Webhooks router** (`backend/routers/webhooks.py`)
+   - Returns 200 immediately, processes via `BackgroundTasks`.
+   - For each comment: dedup (`comment_logs.comment_id` unique),
+     check `monitored_posts.is_active`, load campaign, build reply from
+     `reply_template` or default, POST to
+     `/{comment_id}/replies` via httpx (10s timeout), insert
+     `comment_logs` (status `replied` / `failed`).
+
+5. **DB indexes** (`backend/core/db.py`)
+   - `comment_logs.comment_id` unique
+   - `monitored_posts.{instagram_post_id, tenant_id}` unique compound
+   - `campaigns.{tenant_id, meta_synced_at}` compound
+
+6. **Campaigns UI** (`frontend/src/pages/Campaigns.jsx`)
+   - List view: sync button, status pills, INR budgets, ✅/⚠️ setup
+     indicator, monitored-post count.
+   - Detail view: 2-panel — centre configuration form (with live preview)
+     + Instagram posts list (monitor switch, replies-sent count).
+   - Monitoring switch blocks with toast if campaign not configured.
+
+7. **Comments UI** (`frontend/src/pages/Comments.jsx`)
+   - Feed sourced from `/api/campaigns/comment-logs`.
+   - Filters bar: campaign, centre, status, date range, search.
+   - Per-row: quote block of original comment + brand-colored reply block,
+     status badge, relative timestamp, "View post" link.
+
+## Tests
+- `/app/backend/tests/test_crysta.py` — **24 structural tests, all pass**:
+  auth-protection, Pydantic validation, indexes, dedup,
+  monitor-gate, webhook background task (replied/failed/dedup/skipped),
+  sync ad_account requirement, OAuth scopes, sync upsert with stubbed
+  Meta, callback ad_account_id persistence.
+
+## Live testing (deferred to user — outside sandbox)
+- Live Facebook OAuth login storing `ad_account_id`.
+- `GET /api/campaigns/sync` against real Ads Manager.
+- `GET /api/campaigns/{id}/posts` returning real boosted posts.
+- Webhook auto-reply with real Instagram comment.
+
+## Known intentional regressions (legacy AI-campaign-suggestion feature)
+The previous version of `campaigns.py` had `POST /campaigns/generate`
+(Claude-generated campaign ideas) and `DELETE /campaigns/{id}`. The
+Crysta IVF spec replaced campaigns.py wholesale — these endpoints are
+removed. Two legacy tests in `tests/backend_test.py` and one expecting
+`instagram_basic` scope now fail; this is expected per spec.
+
+## Backlog (P1/P2)
+- P1: Stripe billing / subscription plans
+- P1: Audit Log UI (collection exists, no page)
+- P2: WebSocket realtime feed
+- P2: Move OAuth state to Redis
+- P2: Celery + Redis queue for webhook fan-out
+- P2: App Review / production Meta app permissions

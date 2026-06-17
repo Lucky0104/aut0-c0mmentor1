@@ -42,6 +42,32 @@ async def fb_callback(code: str = Query(...), state: str = Query("")):
     except Exception as e:
         return RedirectResponse(f"{FRONTEND_URL}/login?error={str(e)[:120]}")
 
+    # Fetch the user's first ACTIVE ad account (account_status == 1)
+    # so we can drive campaign sync without asking the user for an id.
+    ad_account_id = None
+    try:
+        accounts = await meta.get_user_adaccounts(user_token)
+        active = next((a for a in accounts if a.get("account_status") == 1), None)
+        if active is None and accounts:
+            # Fall back to whatever the user has, but log it.
+            active = accounts[0]
+        if active:
+            # account_id is the bare numeric id; id is prefixed with 'act_'
+            ad_account_id = str(
+                active.get("account_id")
+                or str(active.get("id", "")).replace("act_", "")
+            ) or None
+        if not ad_account_id:
+            import logging
+            logging.getLogger("auth").warning(
+                "No active ad account returned by /me/adaccounts for fb user %s",
+                me.get("id"),
+            )
+    except Exception as e:
+        import logging
+        logging.getLogger("auth").warning("ad_account fetch failed: %s", e)
+        ad_account_id = None
+
     fb_user_id = me["id"]
     name = me.get("name", "User")
     email = me.get("email", "")
@@ -75,6 +101,8 @@ async def fb_callback(code: str = Query(...), state: str = Query("")):
             "support_email": email,
             "support_phone": "",
             "timezone": "UTC",
+            "ad_account_id": ad_account_id,
+            "ad_account_synced_at": _now() if ad_account_id else None,
             "created_at": _now(),
         })
         await dbmod.members.insert_one({
@@ -89,6 +117,15 @@ async def fb_callback(code: str = Query(...), state: str = Query("")):
         }})
         m = await dbmod.members.find_one({"user_id": user["id"]}, {"_id": 0})
         active_tid = m["tenant_id"] if m else None
+        # Refresh ad_account_id on the active tenant if we have one.
+        if active_tid and ad_account_id:
+            await dbmod.tenants.update_one(
+                {"id": active_tid},
+                {"$set": {
+                    "ad_account_id": ad_account_id,
+                    "ad_account_synced_at": _now(),
+                }},
+            )
 
     jwt_token = create_jwt(user["id"], active_tid)
     resp = RedirectResponse(f"{FRONTEND_URL}/oauth/success")

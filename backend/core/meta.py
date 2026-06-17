@@ -14,7 +14,25 @@ DEFAULT_SCOPES = [
     "email",
     "pages_show_list",
     "business_management",
+    "ads_read",
+    "pages_read_engagement",
+    "pages_manage_engagement",
+    "instagram_manage_comments",
 ]
+
+
+async def get_user_adaccounts(token: str) -> list[dict]:
+    """Returns ad accounts the user has access to."""
+    async with httpx.AsyncClient(timeout=30) as c:
+        r = await c.get(
+            f"{GRAPH}/me/adaccounts",
+            params={
+                "fields": "id,account_id,name,account_status",
+                "access_token": token,
+            },
+        )
+        r.raise_for_status()
+        return r.json().get("data", [])
 
 
 def login_dialog_url(state: str) -> str:

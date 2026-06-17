@@ -60,51 +60,6 @@ async def _get_first_active_page_token(tenant_id: str) -> Optional[str]:
     return decrypt_token(enc)
 
 
-async def _ensure_ad_account_id(tenant: dict, user: dict) -> Optional[str]:
-    """Returns ad_account_id stored on tenant doc; lazily fetches from
-    /me/adaccounts using the user's FB token if not present.
-    """
-    if tenant.get("ad_account_id"):
-        return tenant["ad_account_id"]
-    if not user.get("fb_access_token"):
-        return None
-    try:
-        user_tok = decrypt_token(user["fb_access_token"])
-        async with httpx.AsyncClient(timeout=20) as c:
-            r = await c.get(
-                f"{GRAPH}/me/adaccounts",
-                params={
-                    "fields": "id,account_id,account_status,name",
-                    "access_token": user_tok,
-                },
-            )
-        if r.status_code == 429:
-            raise HTTPException(503, "Meta rate limit, try later")
-        r.raise_for_status()
-        data = r.json().get("data", [])
-        # account_status 1 == ACTIVE
-        active = next(
-            (a for a in data if a.get("account_status") in (1, "1", None)),
-            data[0] if data else None,
-        )
-        if not active:
-            return None
-        # account_id is the bare numeric id (without 'act_' prefix)
-        ad_id = str(active.get("account_id") or str(active.get("id", "")).replace("act_", ""))
-        if not ad_id:
-            return None
-        await dbmod.tenants.update_one(
-            {"id": tenant["id"]},
-            {"$set": {"ad_account_id": ad_id, "ad_account_synced_at": _now_iso()}},
-        )
-        return ad_id
-    except HTTPException:
-        raise
-    except Exception as e:
-        log.warning("Failed to fetch ad_account_id: %s", e)
-        return None
-
-
 def _media_type_from_permalink(permalink: str) -> str:
     if not permalink:
         return "IMAGE"
@@ -167,11 +122,10 @@ class CenterConfig(BaseModel):
 async def sync_campaigns(ctx=Depends(require_role("owner", "admin"))):
     tid = ctx["tenant"]["id"]
     tenant = ctx["tenant"]
-    user = ctx["user"]
 
-    ad_account_id = await _ensure_ad_account_id(tenant, user)
+    ad_account_id = tenant.get("ad_account_id")
     if not ad_account_id:
-        raise HTTPException(400, "No active Meta ad account found for this workspace")
+        raise HTTPException(400, "No ad account found. Please reconnect Facebook.")
 
     page_token = await _get_first_active_page_token(tid)
     if not page_token:
@@ -183,13 +137,13 @@ async def sync_campaigns(ctx=Depends(require_role("owner", "admin"))):
                 f"{GRAPH}/act_{ad_account_id}/campaigns",
                 params={
                     "fields": "id,name,status,objective,daily_budget,lifetime_budget,start_time,stop_time,created_time",
-                    "effective_status": '["ACTIVE","PAUSED"]',
+                    "filtering": '[{"field":"effective_status","operator":"IN","value":["ACTIVE","PAUSED"]}]',
                     "limit": 100,
                     "access_token": page_token,
                 },
             )
     except httpx.HTTPError as e:
-        raise HTTPException(502, f"Meta network error: {e}")
+        raise HTTPException(502, f"Meta API error: {e}")
 
     if r.status_code == 429:
         raise HTTPException(503, "Meta rate limit, try later")
@@ -199,7 +153,7 @@ async def sync_campaigns(ctx=Depends(require_role("owner", "admin"))):
             detail = r.json().get("error", {}).get("message", "")
         except Exception:
             detail = r.text[:200]
-        raise HTTPException(502, f"Meta error: {detail or r.status_code}")
+        raise HTTPException(502, f"Meta API error: {detail or r.status_code}")
 
     data = r.json().get("data", [])
     synced = []
